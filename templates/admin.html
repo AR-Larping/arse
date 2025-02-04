@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Race Admin</title>
+    <script src="/static/htmx.min.js"></script>
+    <link rel="stylesheet" href="/static/simple.min.css">
+</head>
+<body>
+    <h1>Race Admin</h1>
+    
+    <div class="player-creation">
+        <button hx-post="/create-player" hx-target="#player-links" hx-swap="beforeend">
+            Create Player
+        </button>
+    </div>
+
+    <div id="player-links">
+        {% for player_id, steps in players.items() %}
+            <p><a href="/player/{{ player_id }}">Player {{ player_id }}</a></p>
+        {% endfor %}
+    </div>
+</body>
+</html> 

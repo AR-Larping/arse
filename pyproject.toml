@@ -1,0 +1,34 @@
+[project]
+name = "arse"
+version = "0.1.0"
+description = "Augmented Reality State Engine"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.8",
+    "jinja2>=3.1.5",
+    "python-multipart>=0.0.9",
+    "uvicorn>=0.27.1"
+]
+
+[project.scripts]
+hello = "arse:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.3",
+    "httpx>=0.27.0",
+]
+
+# Add this section to include all Python files
+[tool.hatch.build.targets.wheel]
+packages = ["src/arse"]
+
+# Add this to make the package importable from src/
+[tool.hatch.build]
+only-packages = true
+artifacts = ["src/arse"] 

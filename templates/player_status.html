@@ -1,0 +1,8 @@
+<div class="status">
+    <p>Steps: {{ steps }}</p>
+    {% if winner == player_id %}
+        <p class="winner">You won!</p>
+    {% elif winner is not none %}
+        <p class="game-over">Player {{ winner }} won!</p>
+    {% endif %}
+</div> 
