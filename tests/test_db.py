@@ -1,14 +1,11 @@
-import pytest
-import asyncio
-from arse import app, reset_game
+from arse.main import app, reset_game
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
 
-@pytest.fixture(autouse=True)
-def reset_db():
+def setup_function():
     """Reset game state before each test"""
-    asyncio.run(reset_game())
+    reset_game()
 
 def test_admin_page():
     response = client.get("/admin")

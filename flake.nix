@@ -45,6 +45,7 @@
       systems = ["x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin"];
       imports = [ 
         ./nix/webserver.nix
+        ./nix/postgresql.nix
         ./nix/processes.nix
         inputs.process-compose-flake.flakeModule
       ];
@@ -133,6 +134,7 @@
             python312Packages.python-lsp-ruff
             pyright
             nixpkgs-fmt
+            python312Packages.psycopg
           ];
           shellHook = ''
             export PYTHONPATH=${toString ./.}/src:$PYTHONPATH
