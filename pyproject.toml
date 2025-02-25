@@ -10,6 +10,10 @@ dependencies = [
     "python-multipart>=0.0.9",
     "uvicorn>=0.27.1",
     "psycopg>=3.1.12",
+    "sqlalchemy>=2.0.0",
+    "pydantic>=2.0.0",
+    "asyncpg>=0.27.0",
+    "greenlet>=3.1.1",
 ]
 
 [project.scripts]
@@ -21,8 +25,11 @@ build-backend = "hatchling.build"
 
 [project.optional-dependencies]
 test = [
-    "pytest>=8.3.3",
-    "httpx>=0.27.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.18.0",
+    "httpx>=0.23.0",
+    "aiosqlite>=0.17.0",
+    "pytest-cov>=4.1.0"
 ]
 
 # Add this section to include all Python files

@@ -1,36 +1,39 @@
 import pytest
 import asyncio
-from arse import app, reset_game
+from arse.api import app
 from fastapi.testclient import TestClient
+from arse.db import reset_game
 
-client = TestClient(app)
-
-@pytest.fixture(autouse=True)
-def reset_db():
-    """Reset game state before each test"""
+# This is a synchronous wrapper around the async reset_game function
+def sync_reset_game():
     asyncio.run(reset_game())
 
-def test_admin_page():
+def setup_function():
+    """Reset game state before each test"""
+    sync_reset_game()
+
+
+def test_admin_page(client):
     response = client.get("/admin")
     assert response.status_code == 200
     assert "Create Player" in response.text
 
-def test_create_players():
+def test_create_players(client):
     # Create first player
     response = client.post("/create-player")
     assert response.status_code == 200
-    assert "/player/1" in response.text
+    assert "Player 1" in response.text
 
     # Create second player
     response = client.post("/create-player")
     assert response.status_code == 200
-    assert "/player/2" in response.text
+    assert "Player 2" in response.text
 
     # Try to create third player (should fail)
     response = client.post("/create-player")
     assert response.status_code == 400
 
-def test_player_page():
+def test_player_page(client):
     # Create a player first
     client.post("/create-player")
     
@@ -40,7 +43,7 @@ def test_player_page():
     assert "Run!" in response.text
     assert "Steps: 0" in response.text
 
-def test_running_and_winning():
+def test_running_and_winning(client):
     # Create two players
     client.post("/create-player")
     client.post("/create-player")

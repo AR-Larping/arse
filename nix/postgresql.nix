@@ -3,147 +3,216 @@
 {
   perSystem = { config, self', inputs', pkgs, system, ... }: {
     # Define options for the perSystem scope
-    options.postgresql = {
-      package = lib.mkOption {
-        type = lib.types.package;
-        description = "The PostgreSQL package to use";
-      };
-      
-      configFile = lib.mkOption {
-        type = lib.types.package;
-        description = "The PostgreSQL configuration file";
-      };
-      
-      dataDir = lib.mkOption {
-        type = lib.types.str;
-        default = "./run/postgres";
-        description = "Directory for PostgreSQL data";
-      };
+    options.postgresql = lib.mkOption {
+      type = lib.types.attrsOf lib.types.anything;
+      default = {};
+      description = "PostgreSQL configuration";
     };
     
     # Define the configuration for the perSystem scope
     config = {
       # Set default values for options
-      postgresql = {
-        # Use PostgreSQL without additional extensions
-        package = pkgs.postgresql_15;
-        
-        configFile = pkgs.writeTextFile {
-          name = "postgresql.conf";
-          text = ''
-            # Basic PostgreSQL configuration
-            listen_addresses = 'localhost'
-            port = 5432
-            
-            # Memory settings
-            shared_buffers = '128MB'
-            
-            # Logging
-            log_destination = 'stderr'
-            
-            # Autovacuum settings
-            autovacuum = on
-          '';
-        };
-      };
+      postgresql.package = pkgs.postgresql_15;
       
-      # Define the apps
+      # Create apps for PostgreSQL management
       apps = {
+        # Initialize the database
         init-db = {
           type = "app";
-          program = toString (pkgs.writeShellScript "init-db" ''
-            set -e
+          program = toString (pkgs.writeShellScript "init-postgres" ''
+            export PATH="${config.postgresql.package}/bin:$PATH"
             
-            # Create the run directory if it doesn't exist
-            mkdir -p "$(dirname "${config.postgresql.dataDir}")"
+            # Initialize PostgreSQL database
+            PGDATA="$PWD/run/postgres"
             
-            DB_DIR="$(cd "$(dirname "${config.postgresql.dataDir}")" && pwd)/$(basename "${config.postgresql.dataDir}")"
-            POSTGRES="${config.postgresql.package}/bin"
+            # Find an available port
+            PORT=$(${pkgs.python3}/bin/python -c '
+import socket
+s = socket.socket()
+s.bind(("", 0))
+print(s.getsockname()[1])
+s.close()
+')
+            echo "Using port $PORT for PostgreSQL"
             
-            # Set environment variables for easier access
-            export PGDATA="$DB_DIR"
-            export PGHOST="$DB_DIR"
-            export PGPORT="5432"
+            # Store the port for later use
+            mkdir -p "$PWD/run"
+            echo "$PORT" > "$PWD/run/postgres_port"
             
-            # Check if the database is already initialized
-            if [ -f "$DB_DIR/PG_VERSION" ]; then
-              echo "PostgreSQL database already initialized in $DB_DIR"
-            else
-              echo "Initializing PostgreSQL database in $DB_DIR"
-              # Remove the directory if it exists but is not a valid database
-              if [ -d "$DB_DIR" ]; then
-                rm -rf "$DB_DIR"
-              fi
-              mkdir -p "$DB_DIR"
-              $POSTGRES/initdb -D "$DB_DIR" --auth=trust --no-locale --encoding=UTF8
-              
-              # Directly append to the configuration file
-              cat >> "$DB_DIR/postgresql.conf" <<-EOF
+            # Force clean start by removing the data directory
+            if [ -d "$PGDATA" ]; then
+              echo "Removing existing PostgreSQL data directory for clean start..."
+              rm -rf "$PGDATA"
+            fi
+            
+            echo "Initializing PostgreSQL database in $PGDATA"
+            initdb -D "$PGDATA"
+            
+            # Configure PostgreSQL to listen on localhost with the dynamic port
+            echo "Configuring PostgreSQL..."
+            cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+# -----------------------------
+# PostgreSQL configuration file
+# -----------------------------
+
 listen_addresses = 'localhost'
-port = 5432
-EOF
-              
-              # Simple pg_hba.conf
-              cat > "$DB_DIR/pg_hba.conf" << 'EOT'
-# TYPE  DATABASE        USER            ADDRESS                 METHOD
-local   all             all                                     trust
-host    all             all             127.0.0.1/32            trust
-host    all             all             ::1/128                 trust
-EOT
-            fi
+port = $PORT
+PGCONF
+
+            # Replace $PORT with the actual port number
+            sed -i.bak "s/\$PORT/$PORT/" "$PGDATA/postgresql.conf"
             
-            # Start PostgreSQL temporarily
+            # Start PostgreSQL
             echo "Starting PostgreSQL to create/update database..."
-            $POSTGRES/pg_ctl -D "$DB_DIR" start -w
+            pg_ctl -D "$PGDATA" -l "$PGDATA/logfile" start
             
-            # Create application database if needed
-            if ! $POSTGRES/psql -h localhost -p 5432 -lqt | cut -d \| -f 1 | grep -qw arse; then
-              echo "Creating application database 'arse'..."
-              $POSTGRES/createdb -h localhost arse
-            fi
+            # Wait for PostgreSQL to start
+            echo -n "waiting for server to start..."
+            until pg_isready -h localhost -p $PORT -q; do
+              echo -n "."
+              sleep 0.1
+            done
+            echo " done"
+            echo "server started"
+            
+            # Create postgres role
+            echo "Creating postgres role..."
+            psql -h localhost -p $PORT -d postgres -c "CREATE ROLE postgres WITH LOGIN SUPERUSER;" || echo "Role postgres may already exist"
+            
+            # Create application database directly (not in a function)
+            echo "Creating application database 'arse'..."
+            psql -h localhost -p $PORT -d postgres -c "CREATE DATABASE arse;" || echo "Database may already exist"
+            
+            # Grant permissions
+            echo "Granting permissions..."
+            psql -h localhost -p $PORT -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE arse TO postgres;" || true
             
             # Stop PostgreSQL
-            $POSTGRES/pg_ctl -D "$DB_DIR" stop
+            echo -n "waiting for server to shut down..."
+            pg_ctl -D "$PGDATA" stop -m fast
+            echo " done"
+            echo "server stopped"
             
             echo "Database initialization complete."
           '');
         };
-
+        
+        # Start the database
         start-db = {
           type = "app";
-          program = toString (pkgs.writeShellScript "start-db" ''
-            set -e
+          program = toString (pkgs.writeShellScript "start-database" ''
+            export PATH="${config.postgresql.package}/bin:$PATH"
             
-            # Create the run directory if it doesn't exist
-            mkdir -p "$(dirname "${config.postgresql.dataDir}")"
+            PGDATA="$PWD/run/postgres"
             
-            DB_DIR="$(cd "$(dirname "${config.postgresql.dataDir}")" && pwd)/$(basename "${config.postgresql.dataDir}")"
-            POSTGRES="${config.postgresql.package}/bin"
+            # Read the port from the file
+            if [ -f "$PWD/run/postgres_port" ]; then
+              PORT=$(cat "$PWD/run/postgres_port")
+            else
+              # Find an available port if the file doesn't exist
+              PORT=$(${pkgs.python3}/bin/python -c '
+import socket
+s = socket.socket()
+s.bind(("", 0))
+print(s.getsockname()[1])
+s.close()
+')
+              echo "$PORT" > "$PWD/run/postgres_port"
+            fi
+            echo "Using port $PORT for PostgreSQL"
             
-            # Check if the database is initialized
-            if [ ! -f "$DB_DIR/PG_VERSION" ]; then
-              echo "Database not initialized. Run 'nix run .#init-db' first."
-              exit 1
+            # Check if PostgreSQL is already running
+            if pg_isready -h localhost -p $PORT -q; then
+              echo "PostgreSQL is already running. Stopping it first..."
+              pg_ctl -D "$PGDATA" stop -m fast || true
+              sleep 2
             fi
             
-            # Ensure proper permissions
-            chmod 700 "$DB_DIR"
+            # Clean up any stale lock files
+            if [ -f "$PGDATA/postmaster.pid" ]; then
+              echo "Removing stale lock file..."
+              rm -f "$PGDATA/postmaster.pid"
+            fi
             
-            # Handle signals properly
-            cleanup() {
-              echo "Shutting down PostgreSQL..."
-              $POSTGRES/pg_ctl -D "$DB_DIR" stop -m fast
-              exit 0
-            }
+            # Make sure pg_hba.conf is properly configured
+            cat > "$PGDATA/pg_hba.conf" <<'PGHBA'
+# TYPE  DATABASE        USER            ADDRESS                 METHOD
+local   all             all                                     trust
+host    all             all             127.0.0.1/32            trust
+host    all             all             ::1/128                 trust
+PGHBA
             
-            trap cleanup SIGINT SIGTERM
+            # Update the port in postgresql.conf
+            cat > "$PGDATA/postgresql.conf" <<'PGCONF'
+# -----------------------------
+# PostgreSQL configuration file
+# -----------------------------
+
+listen_addresses = 'localhost'
+port = $PORT
+PGCONF
+
+            # Replace $PORT with the actual port number
+            sed -i.bak "s/\$PORT/$PORT/" "$PGDATA/postgresql.conf"
             
-            echo "Starting PostgreSQL database from $DB_DIR"
-            $POSTGRES/postgres -D "$DB_DIR" &
-            PG_PID=$!
+            # Start PostgreSQL
+            echo "Starting PostgreSQL database from $PGDATA on port $PORT"
+            pg_ctl -D "$PGDATA" -l "$PGDATA/logfile" start
             
-            # Wait for PostgreSQL to exit
-            wait $PG_PID
+            # Verify the arse database exists and is accessible
+            echo "Verifying arse database..."
+            if ! psql -h localhost -p $PORT -d arse -c "SELECT 1" >/dev/null 2>&1; then
+              echo "Creating arse database..."
+              createdb -h localhost -p $PORT arse
+              echo "Creating postgres role..."
+              psql -h localhost -p $PORT -d postgres -c "CREATE ROLE postgres WITH LOGIN SUPERUSER;" || echo "Role may already exist"
+              echo "Granting permissions..."
+              psql -h localhost -p $PORT -d postgres -c "GRANT ALL PRIVILEGES ON DATABASE arse TO postgres;" || true
+            fi
+            
+            # Debug: List all databases
+            echo "Available databases:"
+            psql -h localhost -p $PORT -l
+            
+            # Keep the script running
+            echo "PostgreSQL is running on port $PORT. Press Ctrl+C to stop."
+            tail -f "$PGDATA/logfile"
+          '');
+        };
+        
+        # Create a test script to verify the database connection
+        test-db = {
+          type = "app";
+          program = toString (pkgs.writeShellScript "test-postgres" ''
+            export PATH="${config.postgresql.package}/bin:$PATH"
+            
+            if [ -f "$PWD/run/postgres_port" ]; then
+              PORT=$(cat "$PWD/run/postgres_port")
+              echo "Testing PostgreSQL connection on port $PORT..."
+              
+              # Test basic connection
+              if pg_isready -h localhost -p $PORT; then
+                echo "✅ Basic connection successful"
+              else
+                echo "❌ Basic connection failed"
+                exit 1
+              fi
+              
+              # Test database connection
+              if psql -h localhost -p $PORT -d postgres -c "SELECT 1" >/dev/null 2>&1; then
+                echo "✅ Database connection successful"
+              else
+                echo "❌ Database connection failed"
+                exit 1
+              fi
+              
+              # List databases
+              echo "Available databases:"
+              psql -h localhost -p $PORT -l
+            else
+              echo "PostgreSQL port file not found"
+              exit 1
+            fi
           '');
         };
       };
